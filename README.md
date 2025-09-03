@@ -1,1 +1,3 @@
-"# capstone-garcia-olivares" 
+Integrantes:
+* Sebastián García
+* Catalina Olivares
