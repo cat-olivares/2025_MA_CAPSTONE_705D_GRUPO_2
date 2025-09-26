@@ -1,0 +1,24 @@
+<main class="min-h-[calc(100vh-64px)] grid place-items-center px-4 py-10">
+  <section class="w-full max-w-md rounded-2xl border shadow-sm bg-white p-6 md:p-8">
+    <header class="mb-6">
+      <h1 class="text-2xl font-semibold text-neutral-900">Crear cuenta</h1>
+      <p class="text-sm text-neutral-500 mt-1">Únete para comprar más rápido y ver tu historial.</p>
+    </header>
+
+    <form [formGroup]="form" (ngSubmit)="onSubmit()" class="flex flex-col gap-3 max-w-sm mx-auto">
+      <input formControlName="name" placeholder="Nombre" />
+      <input formControlName="email" type="email" placeholder="Correo" />
+      <input type="tel" formControlName="phone" placeholder="(+569)12345678" (input)="onPhoneInput($event)" />
+      <small class="text-xs text-neutral-500">Se autocompleta el prefijo (+569)</small>
+      <input formControlName="password" type="password" placeholder="Contraseña" />
+
+      <button type="submit" [disabled]="loading || form.invalid">
+        {{ loading ? 'Creando cuenta...' : 'Registrarme' }}
+      </button>
+
+      <p *ngIf="error" class="text-red-500 text-sm">{{ error }}</p>
+      <a routerLink="/auth/login" class="text-sm underline">Ya tengo cuenta</a>
+    </form>
+
+  </section>
+</main>
