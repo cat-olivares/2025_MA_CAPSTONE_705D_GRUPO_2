@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, tap, switchMap } from 'rxjs'; // <-- ojo switchMap
+import { BehaviorSubject, tap, switchMap, map } from 'rxjs'; // <-- ojo switchMap
 import { User, normalizeUser } from './models/user';
 import { AuthResponse, RegisterDto, LoginDto } from './models/auth';
 import { environment } from '../../../../environments/environment';
@@ -66,6 +66,28 @@ export class AuthService {
     }
     this.currentUserSubject.next(user);
   }
+
+  forgotPassword(email: string) {
+    return this.http.post<{ message: string }>('/api/auth/forgot-password', { email });
+  }
+
+  resetPassword(newPassword: string, resetToken: string) {
+    return this.http.put<{ message: string }>('/api/auth/reset-password', { newPassword, resetToken });
+  }
+
+  changePassword(oldPassword: string, newPassword: string) {
+    // requiere estar logueado (el interceptor ya adjunta el Bearer)
+    return this.http.put<{ message: string }>('/api/auth/change-password', { oldPassword, newPassword });
+  }
+
+  readonly role$ = this.user$.pipe(map(u => u?.role ?? null));
+  readonly isAdmin$ = this.role$.pipe(map(r => r === 'admin'));
+  readonly isCustomer$ = this.role$.pipe(map(r => r === 'customer'));
+  readonly isLoggedIn$ = this.user$.pipe(map(Boolean));
+
+  get current(): User | null { return this.currentUserSubject.value; }
+  hasRole(role: 'admin' | 'customer'): boolean { return this.current?.role === role; }
+
 }
 
 function normalizePhone(raw: string): string {
@@ -83,3 +105,4 @@ function normalizePhone(raw: string): string {
   const digits = phone.replace(/\D/g, '').slice(-8);
   return `+569 ${digits}`;
 }
+
