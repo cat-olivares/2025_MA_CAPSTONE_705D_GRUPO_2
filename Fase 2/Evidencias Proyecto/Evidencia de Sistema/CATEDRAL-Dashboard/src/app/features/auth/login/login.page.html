@@ -1,0 +1,84 @@
+<!-- Header -->
+<app-header></app-header>
+
+<div class="min-h-screen flex flex-col">
+  <main class="min-h-[calc(100vh-64px)] grid place-items-center px-4 py-10 bg-[#f1f3f6]">
+
+    <!-- CARD COMPACTA -->
+    <section
+      class="w-[360px] sm:w-[380px] max-w-[92vw] rounded-xl bg-white shadow-lg
+             border border-[#e6eaf1] p-5 md:p-6">
+
+      <!-- Encabezado -->
+      <header class="mb-4 text-center">
+        <div class="mx-auto mb-2 inline-flex items-center gap-2 rounded-full bg-[#2f3f56] px-3 py-1 text-white">
+          <span class="inline-block h-2 w-2 rounded-full bg-white/80"></span>
+          <span class="text-xs tracking-wide opacity-90">Catedral Perfumes</span>
+        </div>
+        <h1 class="text-xl font-semibold text-[#2f3f56]">Iniciar sesión</h1>
+      </header>
+
+      <!-- Form -->
+      <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-4">
+
+        <!-- Email (label flotante) -->
+        <label class="relative block">
+          <input
+            type="email"
+            formControlName="email"
+            placeholder=" "
+            class="peer w-full rounded-xl bg-[#eef2f7] px-4 pt-4 pb-2 text-[15px] outline-none
+                   border border-transparent focus:border-[#a9b6cb] focus:bg-white transition" />
+          <span
+            class="pointer-events-none absolute left-4 top-2.5 text-[12px] text-[#6b7a90] transition-all
+                   peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-[14px]
+                   peer-focus:top-2.5 peer-focus:text-[12px]">
+            Correo
+          </span>
+        </label>
+        <p class="mt-1 text-xs text-red-600" *ngIf="form.get('email')?.touched && form.get('email')?.invalid">
+          Ingresa un correo válido.
+        </p>
+
+        <!-- Password -->
+        <label class="relative block">
+          <input
+            type="password"
+            formControlName="password"
+            placeholder=" "
+            class="peer w-full rounded-xl bg-[#eef2f7] px-4 pt-4 pb-2 text-[15px] outline-none
+                   border border-transparent focus:border-[#a9b6cb] focus:bg-white transition" />
+          <span
+            class="pointer-events-none absolute left-4 top-2.5 text-[12px] text-[#6b7a90] transition-all
+                   peer-placeholder-shown:top-1/2 peer-placeholder-shown:-translate-y-1/2 peer-placeholder-shown:text-[14px]
+                   peer-focus:top-2.5 peer-focus:text-[12px]">
+            Contraseña
+          </span>
+        </label>
+        <p class="mt-1 text-xs text-red-600" *ngIf="form.get('password')?.touched && form.get('password')?.invalid">
+          Mínimo 6 caracteres.
+        </p>
+
+        <!-- Links -->
+        <div class="flex items-center justify-between text-sm">
+          <a routerLink="/auth/forgot-password" class="text-[#2f3f56]/80 hover:underline">Olvidé mi contraseña</a>
+          <a routerLink="/auth/register" class="text-[#2f3f56] hover:underline">Crear cuenta</a>
+        </div>
+
+        <!-- Submit -->
+        <button
+          type="submit"
+          [disabled]="form.invalid || loading"
+          class="w-full rounded-lg bg-[#2f3f56] text-white py-2 font-medium shadow
+                 hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed transition">
+          {{ loading ? 'Entrando…' : 'Aceptar' }}
+        </button>
+
+        <!-- Error global -->
+        <p class="text-sm text-red-600 text-center" *ngIf="error">{{ error }}</p>
+      </form>
+    </section>
+  </main>
+
+  <app-footer class="mt-auto"></app-footer>
+</div>

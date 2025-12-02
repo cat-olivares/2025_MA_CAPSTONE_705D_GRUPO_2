@@ -1,0 +1,160 @@
+<app-header></app-header>
+
+<div class="min-h-screen flex flex-col bg-[#f7f9fc]">
+  <main class="flex-1 container-7xl py-4">
+    <h1 class="text-xl font-semibold text-[#2f3f56] mb-1">
+      Carro de compras
+    </h1>
+    <p class="text-xs text-neutral-500 mb-4">
+      Revisa tus productos antes de confirmar la reserva.
+    </p>
+
+    <ng-container *ngIf="(items$ | async) as items; else empty">
+      <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+
+        <!-- LISTA -->
+        <section class="bg-white rounded-2xl shadow-sm ring-1 ring-[#e8ecf4]">
+          <div class="border-b last:border-b-0" *ngFor="let it of items">
+            <div class="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:gap-4">
+              <!-- Imagen -->
+              <div class="flex-shrink-0 self-center sm:self-auto">
+                <img
+                  [src]="it.product.imageUrl"
+                  class="w-20 h-20 rounded-xl object-contain bg-[#f5f7fb]"
+                  alt=""
+                />
+              </div>
+
+              <!-- Info -->
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-semibold text-[#1f2937] line-clamp-2">
+                  {{ it.product.name }}
+                </div>
+                <div class="mt-1 text-xs text-neutral-500">
+                  Precio unitario:
+                  {{ it.product.price | currency:'CLP':'symbol-narrow':'1.0-0' }}
+                </div>
+              </div>
+
+              <!-- Cantidad + Quitar -->
+              <div
+                class="flex flex-row items-center justify-between gap-3 sm:flex-col sm:items-end sm:justify-center"
+              >
+                <!-- Cantidad -->
+                <div class="inline-flex items-center gap-2 rounded-full bg-[#f5f7fb] px-2 py-1">
+                  <button
+                    type="button"
+                    class="w-8 h-8 rounded-full grid place-items-center text-base font-semibold
+                           border border-[#2f3f56] text-[#2f3f56] active:scale-95 transition"
+                    (click)="dec(it)"
+                  >
+                    −
+                  </button>
+                  <span class="w-8 text-center text-sm font-semibold text-[#111827]">
+                    {{ it.qty }}
+                  </span>
+                  <button
+                    type="button"
+                    class="w-8 h-8 rounded-full grid place-items-center text-base font-semibold
+                           border border-[#2f3f56] bg-[#2f3f56] text-white active:scale-95 transition"
+                    (click)="inc(it)"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <!-- Quitar -->
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 text-xs font-medium text-[#2f3f56] hover:text-[#1f2937]"
+                  (click)="remove(it)"
+                >
+                  <mat-icon class="!text-[18px]">delete_outline</mat-icon>
+                  <span>Quitar</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="px-4 py-3 flex flex-col gap-2 text-[11px] text-neutral-500 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <span>
+              {{ items.length }}
+              {{ items.length === 1 ? 'producto en el carro' : 'productos en el carro' }}
+            </span>
+            <button
+              type="button"
+              class="self-start sm:self-auto text-[#2f3f56] hover:text-[#1f2937] font-medium"
+              (click)="clear()"
+            >
+              Vaciar carrito
+            </button>
+          </div>
+        </section>
+
+        <!-- RESUMEN -->
+        <aside class="bg-white rounded-2xl shadow-sm ring-1 ring-[#e8ecf4] p-5 h-fit sticky top-16">
+          <h2 class="text-base font-semibold text-[#2f3f56] mb-3">
+            Resumen de tu pedido
+          </h2>
+
+          <div class="space-y-1 text-sm">
+            <div class="flex justify-between">
+              <span>Subtotal</span>
+              <span>{{ total() | currency:'CLP':'symbol-narrow':'1.0-0' }}</span>
+            </div>
+            <div class="flex justify-between text-neutral-500">
+              <span>Descuentos</span>
+              <span>$0</span>
+            </div>
+          </div>
+
+          <div class="border-t mt-3 pt-3 flex justify-between items-baseline">
+            <span class="text-sm font-semibold text-[#2f3f56]">Total a pagar</span>
+            <span class="text-lg font-bold text-[#2f3f56]">
+              {{ total() | currency:'CLP':'symbol-narrow':'1.0-0' }}
+            </span>
+          </div>
+
+          <p class="mt-3 text-[11px] text-neutral-500 leading-snug">
+            La reserva no tiene costo. El pago se coordina directamente con el vendedor.
+          </p>
+
+          <button
+            mat-raised-button
+            color="primary"
+            class="w-full mt-4 !bg-[#2f3f56] hover:!bg-[#354463] !text-white !rounded-full !py-2.5"
+            (click)="reserve()"
+            [disabled]="isSubmitting || !items.length"
+          >
+            <ng-container *ngIf="!isSubmitting; else loadingTpl">
+              Confirmar reserva
+            </ng-container>
+
+            <ng-template #loadingTpl>
+              <span class="inline-flex items-center gap-2 text-sm">
+                <mat-progress-spinner diameter="18" mode="indeterminate">
+                </mat-progress-spinner>
+                <span>Procesando…</span>
+              </span>
+            </ng-template>
+          </button>
+        </aside>
+      </div>
+    </ng-container>
+
+    <ng-template #empty>
+      <div class="bg-white rounded-2xl shadow-sm ring-1 ring-[#e8ecf4] p-10 text-center">
+        <p class="text-sm text-neutral-600 mb-2">
+          Tu carrito está vacío.
+        </p>
+        <p class="text-xs text-neutral-400">
+          Agrega tus perfumes favoritos para comenzar tu reserva.
+        </p>
+      </div>
+    </ng-template>
+  </main>
+
+  <app-footer class="mt-auto"></app-footer>
+</div>

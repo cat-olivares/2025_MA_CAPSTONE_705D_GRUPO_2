@@ -9,6 +9,11 @@ import { ProductsModule } from './products/products.module';
 import { CategoriesModule } from './categories/categories.module';
 import { StockModule } from './stock/stock.module';
 import { ReservationsModule } from './reservations/reservations.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { ChatsModule } from './chats/chats.module';
+import { MessagesModule } from './messages/messages.module';
+import { RealtimeModule } from './realtime/realtime.module';
+import { RatingsModule } from './ratings/rating.module';
 
 
 @Module({
@@ -31,6 +36,11 @@ import { ReservationsModule } from './reservations/reservations.module';
     CategoriesModule,
     StockModule,
     ReservationsModule,
+    NotificationsModule,
+    ChatsModule,
+    MessagesModule, 
+    RealtimeModule, 
+    RatingsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { CreateReservationDto, ReservationStatus } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { InjectModel } from '@nestjs/mongoose';
@@ -7,112 +7,327 @@ import { ReservationDetail } from './schemas/reservation-detail.schema';
 import { Model, Types } from 'mongoose';
 import { Product } from 'src/products/schemas/product.schema';
 import { Stock } from 'src/stock/schemas/stock.schema';
+import { User } from 'src/users/schemas/user.schema';
+import { ConfigService } from '@nestjs/config';
+import { UsersService } from 'src/users/users.service';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { ChatsService } from 'src/chats/chats.service';
+import { CreateGuestReservationDto } from 'src/guest/dto/guestReservation.dto';
+
+
+const reservationPopulate = [
+  {
+    path: 'user',
+    select: 'name email phone'
+  },
+  {
+    path: 'reservationDetail',
+    select: 'product quantity subtotal',
+    populate: {
+      path: 'product',
+      select: 'code name price img_url',
+      populate: [
+        {
+          path: 'stock',
+          select: 'quantity reserved available'
+        },
+        {
+          path: 'categories',
+          select: 'name'
+        }
+      ]
+    }
+  }
+];
 
 @Injectable()
 export class ReservationsService {
+
+  private readonly logger = new Logger(ReservationsService.name);
 
   constructor(
     @InjectModel(Reservation.name) private readonly reservationModel: Model<Reservation>,
     @InjectModel(ReservationDetail.name) private readonly reservationDetailModel: Model<ReservationDetail>,
     @InjectModel(Product.name) private readonly productModel: Model<Product>,
     @InjectModel(Stock.name) private readonly stockModel: Model<Stock>,
-  ) {}
-  
+    @InjectModel(User.name) private readonly userModel: Model<User>,
+    private readonly usersService: UsersService,
+    private readonly notificationsService: NotificationsService,
+    private readonly chatsService: ChatsService,
+    private readonly config: ConfigService,
+  ) { }
+
   async create(dto: CreateReservationDto) {
     if (!dto.reservationDetail?.length) {
-      throw new HttpException('reservationDetail debe tener al menos 1 ítem', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'reservationDetail debe tener al menos 1 ítem',
+        HttpStatus.BAD_REQUEST
+      );
     }
 
-    const productIds = dto.reservationDetail.map(d => new Types.ObjectId(d.product));
+    // 1) Cargar productos y validar stock
+    const productIds = dto.reservationDetail.map(
+      (d) => new Types.ObjectId(d.product)
+    );
+
     const products = await this.productModel
-    .find({ _id: { $in: productIds } })
-    .select('_id code name price stock')
-    .populate({ path: 'stock', select: 'available reserved quantity' }) 
-    .lean();
+      .find({ _id: { $in: productIds } })
+      .select('_id code name price stock')
+      .populate({ path: 'stock', select: 'available reserved quantity' })
+      .lean();
 
-    const byId = new Map(products.map(p => [p._id.toString(), p]));
+    const byId = new Map(products.map((p) => [p._id.toString(), p]));
     const requiredByProduct = new Map<string, number>();
-    
+
     for (const d of dto.reservationDetail) {
-      requiredByProduct.set(d.product, (requiredByProduct.get(d.product) ?? 0) + d.quantity);
+      requiredByProduct.set(
+        d.product,
+        (requiredByProduct.get(d.product) ?? 0) + d.quantity
+      );
     }
-    
-    // Modificar el stock
+
+    // 2) Modificar el stock (reserved)
     for (const [productId, need] of requiredByProduct.entries()) {
       const producto = byId.get(productId)! as any;
 
-      const stockId = typeof producto.stock[0]._id === 'string' ? new Types.ObjectId(producto.stock[0]._id) : producto.stock[0]._id;
+      const stockId =
+        typeof producto.stock[0]._id === 'string'
+          ? new Types.ObjectId(producto.stock[0]._id)
+          : producto.stock[0]._id;
 
       const upd = await this.stockModel.updateOne(
-        { _id: stockId, $expr: { $gte: [{ $subtract: ['$quantity', '$reserved'] }, Number(need) ]} },
-        { $inc: { reserved: Number(need) }}
+        {
+          _id: stockId,
+          $expr: {
+            $gte: [{ $subtract: ['$quantity', '$reserved'] }, Number(need)],
+          },
+        },
+        { $inc: { reserved: Number(need) } }
       );
 
       if (upd.matchedCount !== 1) {
-        // leer estado actual para el mensaje (opcional)
-        const curr = await this.stockModel.findById(stockId).select('quantity reserved').lean();
-        const availableNow = Math.max(0, Number(curr?.quantity ?? 0) - Number(curr?.reserved ?? 0));
-        
+        const curr = await this.stockModel
+          .findById(stockId)
+          .select('quantity reserved')
+          .lean();
+        const availableNow = Math.max(
+          0,
+          Number(curr?.quantity ?? 0) - Number(curr?.reserved ?? 0)
+        );
+
         throw new HttpException(
-          `Stock insuficiente para ${producto?.name ?? productId}. Requerido ${Number(need)}, disponible ${availableNow}`,
+          `Stock insuficiente para ${producto?.name ?? productId}. Requerido ${Number(
+            need
+          )}, disponible ${availableNow}`,
           HttpStatus.BAD_REQUEST
         );
       }
-      
       if (upd.modifiedCount !== 1) {
-        const available = (producto.stock && typeof producto.stock === 'object') ? producto.stock.available : undefined;
+        const available =
+          producto.stock && typeof producto.stock === 'object'
+            ? producto.stock.available
+            : undefined;
         throw new HttpException(
           `Stock insuficiente para ${producto?.name ?? productId}. Requerido ${need}, disponible ${available ?? 0}`,
           HttpStatus.BAD_REQUEST
         );
       }
     }
-    // Recalcular subtotales con price del producto
-    const detailsToInsert = dto.reservationDetail.map(detail => {
+
+    // 3) Recalcular subtotales con price del producto
+    const detailsToInsert = dto.reservationDetail.map((detail) => {
       const prod = byId.get(detail.product)! as any;
       const unitPrice = Number(prod.price);
       const qty = detail.quantity;
 
       const computedSubtotal = unitPrice * qty;
-      return { product: new Types.ObjectId(detail.product), quantity: qty, subtotal: computedSubtotal };
+      return {
+        product: new Types.ObjectId(detail.product),
+        quantity: qty,
+        subtotal: computedSubtotal,
+      };
     });
 
-    // Insertar N ReservationDetail, calcular total y crear Reservation
-    const insertedDetails = await this.reservationDetailModel.insertMany(detailsToInsert);
-    const detailIds = insertedDetails.map(d => d._id);
+    // 4) Insertar N ReservationDetail, calcular total
+    const insertedDetails = await this.reservationDetailModel.insertMany(
+      detailsToInsert
+    );
+    const detailIds = insertedDetails.map((d) => d._id);
 
-    // total = suma de subtotales recalculados
-    const computedTotal = insertedDetails.reduce((acc, d) => acc + Number(d.subtotal ?? 0), 0);
+    const computedTotal = insertedDetails.reduce(
+      (acc, d) => acc + Number(d.subtotal ?? 0),
+      0
+    );
 
-    // crear la reserva apuntando a los detalles
+    const customerId = new Types.ObjectId(dto.user);
+
+    // 5) Crear la reserva (SIN chatId aún)
     const reservation = await this.reservationModel.create({
-      user: new Types.ObjectId(dto.user),
+      user: customerId,
       status: (dto.status as any) ?? ReservationStatus.PENDING,
       total: computedTotal,
       reservationDetail: detailIds,
     });
 
-    // populate para el front
+    // 6) Crear / obtener el chat para ESTA reserva
+    let chatId: Types.ObjectId | undefined;
+
+    try {
+      const adminId = this.config.get<string>(
+        'ADMIN_USER_ID',
+        '68d9bc388629e807c77810d2'
+      );
+
+      const chat = await this.chatsService.getOrCreateByPair(
+        customerId.toString(),
+        adminId,
+        reservation._id.toString(),
+      );
+
+      chatId = chat._id as any;
+
+      // Actualizar la reserva con el chatId creado
+      await this.reservationModel.updateOne(
+        { _id: reservation._id },
+        { $set: { chatId } },
+      );
+
+      console.log('[RES.SRV] chat creado/obtenido:', {
+        chatId,
+        reservationId: reservation._id.toString(),
+        customerId: customerId.toString(),
+        adminId,
+      });
+    } catch (e) {
+      console.log('[RES.SRV] No se pudo crear/obtener el chat', e);
+    }
+
+    // 7) 🔥 Disparar notificaciones EN BACKGROUND (no bloquear respuesta)
+    (async () => {
+      try {
+        const userDatos = await this.usersService.findByIdWithPassword(
+          customerId.toString()
+        );
+        const customerRol = userDatos?.role;
+        let customerName: string | undefined;
+
+        if (customerRol === 'customer') {
+          customerName = userDatos?.name;
+        } else {
+          customerName = 'Invitad@';
+        }
+
+        await this.notificationsService.reservationCreated({
+          reservationId: reservation._id.toString(),
+          customerId: customerId.toString(),
+          customerName,
+          customerEmail: userDatos?.email,
+        });
+      } catch (err) {
+        this.logger.error(
+          '[RES.SRV] Error en notificaciones post-reserva',
+          (err as any)?.message || String(err),
+        );
+      }
+    })();
+
+    // 8) populate para el front (esto sí se devuelve al cliente)
     const populated = await this.reservationModel
       .findById(reservation._id)
       .populate({
         path: 'reservationDetail',
-        populate: { path: 'product', select: 'name code price' },
+        populate: { path: 'product', select: 'name code price img_url' },
       })
       .lean();
+
+    console.log('[RES.SRV] reserva creada:', {
+      id: reservation._id.toString(),
+      chatId,
+    });
 
     return populated ?? reservation;
   }
 
-  async findAll() {
-    return this.reservationModel.find().exec();
+
+
+  async listByUser(userId: string, status?: ReservationStatus) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('userId inválido');
+    }
+    const filter: any = { user: new Types.ObjectId(userId) };
+    if (status) {
+      filter.status = status;
+    }
+    return this.reservationModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .populate(reservationPopulate)
+      .lean()
+      .exec();
+  }
+
+  async findPreviewByChat(chatId: string) {
+    if (!Types.ObjectId.isValid(chatId)) {
+      throw new BadRequestException('chatId inválido');
+    }
+
+    const res: any = await this.reservationModel
+      .findOne({ chatId: new Types.ObjectId(chatId) })
+      .select('_id createdAt status total reservationDetail')
+      .populate({
+        path: 'reservationDetail',
+        select: 'product quantity subtotal',
+        populate: {
+          path: 'product',
+          // ajusta los campos de imagen a lo que tengas realmente
+          select: 'code name price img_url',
+        },
+      })
+      .lean();
+
+    if (!res) {
+      return null;
+    }
+
+    return {
+      reservationId: res._id.toString(),
+      createdAt: res.createdAt,
+      status: res.status,
+      total: res.total,
+      items: (res.reservationDetail ?? []).map((d: any) => ({
+        name: d.product?.name ?? '',
+        qty: d.quantity ?? 0,
+        // uso price o subtotal por seguridad
+        price: d.product?.price ?? d.subtotal ?? 0,
+        imageUrl: d.product?.img_url ?? undefined,
+      })),
+    };
+  }
+
+  async listAll(opts: { status?: ReservationStatus; page: number; limit: number }) {
+    const filter: any = {};
+    if (opts.status) filter.status = opts.status;
+
+    const [items, total] = await Promise.all([
+      this.reservationModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip((opts.page - 1) * opts.limit)
+        .limit(opts.limit)
+        .populate(reservationPopulate)
+        .lean()
+        .exec(),
+      this.reservationModel.countDocuments(filter),
+    ]);
+
+    return { items, total, page: opts.page, limit: opts.limit };
   }
 
   async findOne(id: string) {
     const reservation = await this.reservationModel
-    .findById(id)
-    .populate({ path: 'reservationDetail' })
-    .exec()
+      .findById(id)
+      .populate(reservationPopulate)
+      .exec()
     if (!reservation) {
       throw new BadRequestException('Reservación no encontrada');
     }
@@ -120,18 +335,21 @@ export class ReservationsService {
   }
 
   /**
-   * No recalcula nada: toma quantity, subtotal y total tal cual vienen en el DTO.
-   * Ajusta stock solo cuando el status cambia de:
-   * * PENDING -> CONFIRMED: resta la cantidad 'reserved' a 'quantity' del dtock del producto
+   * Modifica la reserva. Si el status cambia a CONFIRMED, se elimina el chat asociado a esta reserva
+   * Ajusta stock cuando el status cambia de:
+   * * PENDING -> CONFIRMED: resta la cantidad 'reserved' a 'quantity' del stock del producto
    * * PENDING -> CANCELLED: libera stock reservado
    * @param id Id de la reserva a actualizar
    * @param dto Datos de la reserva para actualizar
    * @returns Reservacion actualizada
    */
   async update(id: string, dto: UpdateReservationDto) {
+    // Validar el status
     if (dto.status && !['PENDING', 'CONFIRMED', 'CANCELLED'].includes(dto.status)) {
       throw new BadRequestException('status inválido');
     }
+
+    // 1) Cargar reserva y sus detalles actuales (ordenados)
     const reservation = await this.reservationModel.findById(id);
     if (!reservation) {
       throw new BadRequestException('Reservación no encontrada');
@@ -140,145 +358,322 @@ export class ReservationsService {
     const prevStatus = reservation.status;
     const nextStatus = dto.status ?? prevStatus;
 
-    // Si no viene reservationDetail en el DTO, sólo actualizar campos simples
-    const incomingDetails = Array.isArray(dto.reservationDetail) ? dto.reservationDetail : null;
+    // NUEVO: saber si esta reserva ya fue reabierta
+    const wasReopened = (reservation as any).wasReopened === true;
 
-    // IDs actuales (en orden actual)
     const currentIds = (reservation.reservationDetail ?? []) as any as Types.ObjectId[];
-    const oldLen = currentIds.length;
-    const newLen = incomingDetails ? incomingDetails.length : oldLen;
+    const currentDetails = currentIds.length
+      ? await this.reservationDetailModel
+        .find({ _id: { $in: currentIds } })
+        .select('_id product quantity subtotal')
+        .lean()
+      : [];
+
+    // Reordenar según currentIds para preservar índice
+    const currentByIndex = currentIds.map(
+      (oid) => currentDetails.find((d) => d._id.toString() === oid.toString())!
+    );
+
+    // 2) Normalizar DTO entrante
+    const incoming = Array.isArray(dto.reservationDetail) ? dto.reservationDetail : null;
+    const oldLen = currentByIndex.length;
+    const newLen = incoming ? incoming.length : oldLen;
     const overlap = Math.min(oldLen, newLen);
 
-    // Modificar detalle de los productos (0..overlap-1)
-    if (incomingDetails) {
-      for (let i = 0; i < overlap; i++) {
-        const detailId = currentIds[i];
-        const payload = incomingDetails[i];
+    // 3) Prepara helpers de stock
+    const collectProductIds = new Set<string>();
+    // productos actuales
+    for (const d of currentByIndex) {
+      collectProductIds.add(d.product.toString());
+    }
+    // productos entrantes (si vienen)
+    if (incoming) {
+      for (const d of incoming) {
+        if (d?.product) {
+          collectProductIds.add(d.product);
+        }
+      }
+    }
 
-        // Validar datos
-        if (!payload?.product) throw new BadRequestException(`Falta product en detalle ${i}`);
-        if (!Number.isFinite(payload.quantity) || payload.quantity < 1) {
+    const products = collectProductIds.size
+      ? await this.productModel
+        .find({
+          _id: { $in: Array.from(collectProductIds).map((pid) => new Types.ObjectId(pid)) },
+        })
+        .select('_id price stock')
+        .populate({ path: 'stock', select: 'quantity reserved' })
+        .lean()
+      : [];
+
+    const prodById = new Map(products.map((p) => [p._id.toString(), p]));
+    const stockIdOf = (productId: string): Types.ObjectId => {
+      const prod: any = prodById.get(productId);
+      const stockRef = Array.isArray(prod?.stock) ? prod.stock[0] : prod?.stock;
+      const raw = stockRef?._id ?? stockRef;
+      if (!raw) {
+        throw new BadRequestException(`Producto sin stock asociado: ${productId}`);
+      }
+      return typeof raw === 'string' ? new Types.ObjectId(raw) : raw;
+    };
+    const priceOf = (productId: string): number =>
+      Number((prodById.get(productId) as any)?.price ?? 0);
+
+    // 4) Diffs de líneas y acumulación de deltas para stock
+    type UpdateSame = {
+      id: Types.ObjectId;
+      productId: string;
+      newQty: number;
+      keepSubtotalFromDto: boolean;
+      dtoSubtotal?: number;
+    };
+    type CreateSpec = { productId: string; qty: number; recompute: boolean };
+
+    const toUpdateSame: UpdateSame[] = [];
+    const toCreate: CreateSpec[] = [];
+    const toDeleteIds: Types.ObjectId[] = [];
+
+    const reserveIncByProduct = new Map<string, number>(); // +delta
+    const reserveDecByProduct = new Map<string, number>(); // +abs(delta)
+
+    const addInc = (pid: string, v: number) =>
+      reserveIncByProduct.set(pid, (reserveIncByProduct.get(pid) ?? 0) + v);
+    const addDec = (pid: string, v: number) =>
+      reserveDecByProduct.set(pid, (reserveDecByProduct.get(pid) ?? 0) + v);
+
+    // 4.1 posiciones compartidas
+    if (incoming) {
+      for (let i = 0; i < overlap; i++) {
+        const curr = currentByIndex[i];
+        const inc = incoming[i];
+
+        if (!inc) {
+          throw new BadRequestException(`Detalle ${i} indefinido`);
+        }
+        const newPid = inc.product;
+        const qty = Number(inc.quantity);
+        const sub = inc.subtotal != null ? Number(inc.subtotal) : 0;
+
+        if (!newPid) {
+          throw new BadRequestException(`Falta product en detalle ${i}`);
+        }
+        if (!Number.isFinite(qty) || qty < 1) {
           throw new BadRequestException(`Cantidad inválida en detalle ${i}`);
         }
-        if (!Number.isFinite(payload.subtotal) || payload.subtotal < 0) {
+        if (!Number.isFinite(sub) || sub < 0) {
           throw new BadRequestException(`Subtotal inválido en detalle ${i}`);
         }
 
-        await this.reservationDetailModel.findByIdAndUpdate(
-          detailId,
-          {
-            $set: {
-              product: new Types.ObjectId(payload.product),
-              quantity: payload.quantity,
-              subtotal: payload.subtotal,
-            },
-          },
-          { new: false }
+        const currPid = curr.product.toString();
+
+        if (currPid === newPid) {
+          const delta = qty - curr.quantity;
+          if (delta === 0) {
+            // misma línea, misma qty -> NO recalcula, mantiene subtotal del DTO
+            toUpdateSame.push({
+              id: curr._id as any,
+              productId: currPid,
+              newQty: qty,
+              keepSubtotalFromDto: true,
+              dtoSubtotal: sub,
+            });
+          } else {
+            // qty cambia -> ajustar reserved y RECALCULAR subtotal
+            if (delta > 0) addInc(currPid, delta);
+            else addDec(currPid, -delta);
+
+            toUpdateSame.push({
+              id: curr._id as any,
+              productId: currPid,
+              newQty: qty,
+              keepSubtotalFromDto: false,
+            });
+          }
+        } else {
+          // cambia el producto -> liberar qty vieja, reservar qty nueva, y RECALCULAR
+          addDec(currPid, curr.quantity);
+          addInc(newPid, qty);
+
+          // baja
+          toDeleteIds.push(curr._id as any);
+          // alta
+          toCreate.push({ productId: newPid, qty, recompute: true });
+        }
+      }
+    }
+
+    // 4.2 altas extra
+    if (incoming && newLen > oldLen) {
+      for (let i = overlap; i < newLen; i++) {
+        const inc = incoming[i];
+        if (!inc) {
+          throw new BadRequestException(`Detalle ${i} indefinido`);
+        }
+        const pid = inc.product;
+        const qty = Number(inc.quantity);
+
+        if (!pid) {
+          throw new BadRequestException(`Falta product en detalle ${i}`);
+        }
+        if (!Number.isFinite(qty) || qty < 1) {
+          throw new BadRequestException(`Cantidad inválida en detalle ${i}`);
+        }
+
+        addInc(pid, qty);
+        toCreate.push({ productId: pid, qty, recompute: true });
+      }
+    }
+
+    // 4.3 bajas extra
+    if (incoming && newLen < oldLen) {
+      for (let i = newLen; i < oldLen; i++) {
+        const curr = currentByIndex[i];
+        const currPid = curr.product.toString();
+        addDec(currPid, curr.quantity);
+        toDeleteIds.push(curr._id as any);
+      }
+    }
+
+    // 5) Aplicar deltas de reserved (primero liberar, luego reservar)
+    for (const [pid, dec] of reserveDecByProduct.entries()) {
+      const stockId = stockIdOf(pid);
+      const upd = await this.stockModel.updateOne(
+        { _id: stockId, reserved: { $gte: dec } },
+        { $inc: { reserved: -dec } }
+      );
+      if (upd.matchedCount !== 1) {
+        throw new BadRequestException(`No hay reservado suficiente para revertir producto ${pid}`);
+      }
+    }
+
+    for (const [pid, inc] of reserveIncByProduct.entries()) {
+      const stockId = stockIdOf(pid);
+      const upd = await this.stockModel.updateOne(
+        { _id: stockId, $expr: { $gte: [{ $subtract: ['$quantity', '$reserved'] }, inc] } },
+        { $inc: { reserved: inc } }
+      );
+      if (upd.matchedCount !== 1) {
+        throw new BadRequestException(
+          `Stock disponible insuficiente para reservar producto ${pid}`
         );
       }
     }
 
-    // Agregar nuevo(s) detalle(s) (overlap..newLen-1)
-    let createdIds: Types.ObjectId[] = [];
-    if (incomingDetails && newLen > oldLen) {
-      const toCreate = incomingDetails.slice(overlap).map((d, idx) => {
-        if (!d?.product) throw new BadRequestException(`Falta product en detalle ${overlap + idx}`);
-        if (!Number.isFinite(d.quantity) || d.quantity < 1) {
-          throw new BadRequestException(`Cantidad inválida en detalle ${overlap + idx}`);
-        }
-        if (!Number.isFinite(d.subtotal) || d.subtotal < 0) {
-          throw new BadRequestException(`Subtotal inválido en detalle ${overlap + idx}`);
-        }
-        return {
-          product: new Types.ObjectId(d.product),
-          quantity: d.quantity,
-          subtotal: d.subtotal, 
-        };
-      });
-
-      const inserted = await this.reservationDetailModel.insertMany(toCreate);
-      createdIds = inserted.map(d => (d as any)._id as Types.ObjectId);
+    // 6) Persistir cambios de detalles
+    // a) bajas
+    if (toDeleteIds.length) {
+      await this.reservationDetailModel.deleteMany({ _id: { $in: toDeleteIds } });
     }
 
-    // Eliminar detalle(s) (newLen..oldLen-1)
-    if (incomingDetails && newLen < oldLen) {
-      const toDeleteIds = currentIds.slice(newLen);
-      if (toDeleteIds.length) {
-        await this.reservationDetailModel.deleteMany({ _id: { $in: toDeleteIds } });
+    // b) updates (mismo product; decide si recalcula o respeta subtotal del DTO)
+    for (const u of toUpdateSame) {
+      const payload: any = {
+        product: new Types.ObjectId(u.productId),
+        quantity: u.newQty,
+      };
+      if (u.keepSubtotalFromDto) {
+        payload.subtotal = u.dtoSubtotal!;
+      } else {
+        const price = priceOf(u.productId);
+        payload.subtotal = price * u.newQty;
       }
+      await this.reservationDetailModel.findByIdAndUpdate(u.id, { $set: payload }, { new: false });
     }
 
-    // Construir array de IDs de detalles para updatear la reserva 
-    let finalDetailIds: Types.ObjectId[];
-    if (incomingDetails) {
-      finalDetailIds = [
-        ...currentIds.slice(0, overlap),
-        ...createdIds,
-      ];
+    // c) altas (recalcular)
+    let createdDetails: ReservationDetail[] = [];
+    if (toCreate.length) {
+      const payload = toCreate.map((c) => ({
+        product: new Types.ObjectId(c.productId),
+        quantity: c.qty,
+        subtotal: priceOf(c.productId) * c.qty,
+      }));
+      createdDetails = await this.reservationDetailModel.insertMany(payload);
+    }
+
+    // 7) Construir nuevo array de IDs en el MISMO ORDEN del DTO (por índice)
+    const createdQueue = createdDetails.map((d) => (d as any)._id as Types.ObjectId);
+    const finalDetailIds: Types.ObjectId[] = [];
+    if (incoming) {
+      for (let i = 0; i < overlap; i++) {
+        const curr = currentByIndex[i];
+        const inc = incoming[i]!;
+        if (curr.product.toString() === inc.product) {
+          finalDetailIds.push(curr._id as any);
+        } else {
+          const nid = createdQueue.shift();
+          if (!nid) {
+            throw new BadRequestException('Inconsistencia creando detalle reemplazado');
+          }
+          finalDetailIds.push(nid);
+        }
+      }
+      while (createdQueue.length) {
+        finalDetailIds.push(createdQueue.shift()!);
+      }
     } else {
-      // si no vino reservationDetail, se mantienen los IDs actuales
-      finalDetailIds = currentIds;
+      finalDetailIds.push(...currentIds);
     }
 
-    // Si cambia el status, aplicar efectos de stock según transición
-    if (dto.status && nextStatus !== prevStatus) {
-      // Traer detalles finales (los que quedarán en la reserva)
-      const finalDetails = await this.reservationDetailModel
-        .find({ _id: { $in: finalDetailIds } })
-        .select('_id product quantity')
-        .lean<{ _id: Types.ObjectId; product: Types.ObjectId; quantity: number }[]>();
+    // 8) Recalcular total
+    const finalDetails = await this.reservationDetailModel
+      .find({ _id: { $in: finalDetailIds } })
+      .select('_id subtotal')
+      .lean();
 
-      // Agrupar quantity por producto
-      const requiredByProduct = new Map<string, number>();
-      for (const d of finalDetails) {
-        const pid = d.product.toString();
-        requiredByProduct.set(pid, (requiredByProduct.get(pid) ?? 0) + Number(d.quantity ?? 0));
-      }
+    const total = finalDetails.reduce((acc, d) => acc + Number(d.subtotal ?? 0), 0);
 
-      // Cargar productos con su stock (para conocer stockId)
-      const productDocs = await this.productModel
-        .find({ _id: { $in: Array.from(requiredByProduct.keys()).map(id => new Types.ObjectId(id)) } })
-        .select('_id stock')
-        .populate({ path: 'stock', select: 'quantity reserved' })
-        .lean();
+    // 9) Transiciones de estado con cantidades FINALES
+    if (dto.status && prevStatus !== nextStatus) {
+      // IMPORTANTE: solo tocamos stock si NO fue reabierta antes
+      if (
+        prevStatus === 'PENDING' &&
+        (nextStatus === 'CONFIRMED' || nextStatus === 'CANCELLED') &&
+        !wasReopened
+      ) {
+        const finals = await this.reservationDetailModel
+          .find({ _id: { $in: finalDetailIds } })
+          .select('product quantity')
+          .lean<{ product: Types.ObjectId; quantity: number }[]>();
 
-      const prodById = new Map(productDocs.map(p => [p._id.toString(), p]));
-
-      // Transiciones de stock
-      for (const [productId, qty] of requiredByProduct.entries()) {
-        const prod: any = prodById.get(productId);
-        const stockRef = Array.isArray(prod?.stock) ? prod.stock[0] : prod?.stock;
-        const stockId = typeof stockRef?._id === 'string' ? new Types.ObjectId(stockRef._id) : stockRef?._id;
-        if (!stockId) throw new BadRequestException(`Producto sin stock asociado: ${productId}`);
-
-        // PENDING -> CONFIRMED: restar reservado
-        if (prevStatus === 'PENDING' && nextStatus === 'CONFIRMED') {
-          const upd = await this.stockModel.updateOne(
-            { _id: stockId, reserved: { $gte: qty } },
-            { $inc: { reserved: -qty, quantity: -qty } }
-          );
-          if (upd.matchedCount !== 1) {
-            throw new BadRequestException(`No hay reservado suficiente para confirmar producto ${productId}`);
-          }
+        const qtyByProduct = new Map<string, number>();
+        for (const d of finals) {
+          const pid = d.product.toString();
+          qtyByProduct.set(pid, (qtyByProduct.get(pid) ?? 0) + d.quantity);
         }
 
-        // PENDING -> CANCELLED: liberar lo reservado
-        if (prevStatus === 'PENDING' && nextStatus === 'CANCELLED') {
-          const upd = await this.stockModel.updateOne(
-            { _id: stockId, reserved: { $gte: qty } },
-            { $inc: { reserved: -qty } }
-          );
-          if (upd.matchedCount !== 1) {
-            throw new BadRequestException(`No hay reservado suficiente para cancelar producto ${productId}`);
+        for (const [pid, qty] of qtyByProduct.entries()) {
+          const stockId = stockIdOf(pid);
+
+          if (nextStatus === 'CONFIRMED') {
+            const upd = await this.stockModel.updateOne(
+              { _id: stockId, reserved: { $gte: qty } },
+              { $inc: { reserved: -qty, quantity: -qty } }
+            );
+            if (upd.matchedCount !== 1) {
+              throw new BadRequestException(
+                `No hay reservado suficiente para confirmar producto ${pid}`
+              );
+            }
+            // aquí podrías borrar el chat asociado si quisieras
+          } else if (nextStatus === 'CANCELLED') {
+            const upd = await this.stockModel.updateOne(
+              { _id: stockId, reserved: { $gte: qty } },
+              { $inc: { reserved: -qty } }
+            );
+            if (upd.matchedCount !== 1) {
+              throw new BadRequestException(
+                `No hay reservado suficiente para cancelar producto ${pid}`
+              );
+            }
           }
         }
       }
     }
 
-    // Armar el update de la Reserva
+    // 10) Guardar y devolver
     const updateDoc: any = {
-      ...(incomingDetails ? { reservationDetail: finalDetailIds } : {}),
-      ...(dto.total !== undefined ? { total: dto.total } : {}),
+      ...(incoming ? { reservationDetail: finalDetailIds } : {}),
+      total,
       ...(dto.status ? { status: dto.status } : {}),
       ...(dto.user ? { user: new Types.ObjectId(dto.user) } : {}),
     };
@@ -287,22 +682,23 @@ export class ReservationsService {
       .findByIdAndUpdate(id, { $set: updateDoc }, { new: true })
       .populate({
         path: 'reservationDetail',
-        populate: { path: 'product', select: 'name code price' },
+        populate: { path: 'product', select: 'name code price img_url' },
       })
       .lean();
 
     return updated;
   }
 
+
   /**
-   * Se revierte el stock segun el status:
+   * Se elimina la reserva y revierte el stock segun el status:
    * * PENDING -> libera reservado: reserved -= qty
    * * CONFIRMED -> repone: quantity += qty
    * * CANCELLED -> no se modifica el stock
    * @param id Id de la reserva a eliminar
    * @returns Reserva eliminada
    */
-  async remove(id: string) {
+  async remove(id: string) { //TO DO
     const reservation = await this.reservationModel.findById(id).lean();
     if (!reservation) throw new BadRequestException('Reservación no encontrada');
 
@@ -328,18 +724,31 @@ export class ReservationsService {
     if (reservation.status !== 'CANCELLED') {
       // Cargar productos con su stock
       const productDocs = await this.productModel
-        .find({ _id: { $in: Array.from(qtyByProduct.keys()).map(id => new Types.ObjectId(id)) } })
+        .find({
+          _id: {
+            $in: Array.from(qtyByProduct.keys()).map(id => new Types.ObjectId(id)),
+          },
+        })
         .select('_id stock')
         .populate({ path: 'stock', select: 'quantity reserved' })
-        .lean();
+        .lean<any>();
 
-      const prodById = new Map(productDocs.map(p => [p._id.toString(), p]));
+      const prodById = new Map<string, any>(
+        productDocs.map((p: any) => [p._id.toString(), p]),
+      );
+
 
       for (const [productId, qty] of qtyByProduct.entries()) {
-        const prod: any = prodById.get(productId);
+        const prod: any = prodById.get(productId) || {};
         const stockRef = Array.isArray(prod?.stock) ? prod.stock[0] : prod?.stock;
-        const stockId = typeof stockRef?._id === 'string' ? new Types.ObjectId(stockRef._id) : stockRef?._id;
-        if (!stockId) throw new BadRequestException(`Producto sin stock asociado: ${productId}`);
+        const stockId =
+          typeof stockRef?._id === 'string'
+            ? new Types.ObjectId(stockRef._id)
+            : stockRef?._id;
+
+        if (!stockId) {
+          throw new BadRequestException(`Producto sin stock asociado: ${productId}`);
+        }
 
         if (reservation.status === 'PENDING') {
           // Liberar reservado
@@ -366,5 +775,163 @@ export class ReservationsService {
     await this.reservationDetailModel.deleteMany({ _id: { $in: detailIds } });
     return await this.reservationModel.findByIdAndDelete(id).exec();
   }
+
+
+  async createGuest(dto: CreateGuestReservationDto) {
+    const { name, email, phone, reservationDetail } = dto;
+
+    if (!reservationDetail?.length) {
+      throw new BadRequestException('reservationDetail debe tener al menos 1 ítem');
+    }
+
+    // 1) Buscar o crear usuario invitado ligado a ese correo
+    const user = await this.usersService.createGuest({
+      email,
+      name,
+      phone,
+    });
+
+    // 2) Armar un CreateReservationDto compatible con tu create()
+    const createDto: CreateReservationDto = {
+      user: (user as any)._id.toString(),
+      status: ReservationStatus.PENDING,
+      reservationDetail: reservationDetail.map((d) => ({
+        product: d.product,
+        quantity: d.quantity,
+        // subtotal no se manda, tú lo recalculas adentro de create()
+      })),
+    } as any;
+
+    // 3) Reutilizar TODA tu lógica de create (stock, chat, notificación, etc.)
+    return this.create(createDto);
+  }
+
+  // reservations.service.ts
+  async reopen(id: string) {
+    // 1) Traer la reserva + detalles (producto, cantidad)
+    const reservation = await this.reservationModel
+      .findById(id)
+      .populate({
+        path: 'reservationDetail',
+        select: 'product quantity',
+        populate: {
+          path: 'product',
+          select: '_id', // solo necesitamos el id
+        },
+      })
+      .lean<{
+        _id: Types.ObjectId;
+        status: ReservationStatus;
+        reservationDetail: { product: any; quantity: number }[];
+      }>();
+
+    if (!reservation) {
+      throw new BadRequestException('Reservación no encontrada');
+    }
+
+    const prevStatus = reservation.status;
+
+    if (
+      prevStatus !== ReservationStatus.CONFIRMED &&
+      prevStatus !== ReservationStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        `Solo se pueden reabrir reservas CONFIRMED o CANCELLED (actual: ${prevStatus})`,
+      );
+    }
+
+    const details = reservation.reservationDetail ?? [];
+
+    // Si no hay ítems, solo cambia el estado a PENDING
+    if (!details.length) {
+      return this.reservationModel
+        .findByIdAndUpdate(
+          id,
+          { $set: { status: ReservationStatus.PENDING } },
+          { new: true },
+        )
+        .lean();
+    }
+
+    // 2) Agrupar cantidades por producto
+    const qtyByProduct = new Map<string, number>();
+    for (const d of details) {
+      const pid = (d.product?._id ?? d.product).toString();
+      qtyByProduct.set(pid, (qtyByProduct.get(pid) ?? 0) + Number(d.quantity ?? 0));
+    }
+
+    // 3) Cargar productos con su stock
+    const productDocs = await this.productModel
+      .find({
+        _id: Array.from(qtyByProduct.keys()).map((id) => new Types.ObjectId(id)),
+      })
+      .select('_id stock')
+      .populate({ path: 'stock', select: 'quantity reserved' })
+      .lean<any[]>(); // importante: any[]
+
+    // aquí forzamos los genéricos para que prod NO sea {}
+    const prodById = new Map<string, any>(
+      productDocs.map((p: any) => [p._id.toString(), p]),
+    );
+
+    // 4) Ajustar stock según el estado anterior
+    for (const [productId, qty] of qtyByProduct.entries()) {
+      const prod: any = prodById.get(productId);
+      const stockRef = Array.isArray(prod?.stock) ? prod.stock[0] : prod?.stock;
+      const stockId =
+        typeof stockRef?._id === 'string'
+          ? new Types.ObjectId(stockRef._id)
+          : stockRef?._id;
+
+      if (!stockId) {
+        throw new BadRequestException(`Producto sin stock asociado: ${productId}`);
+      }
+
+      if (prevStatus === ReservationStatus.CONFIRMED) {
+        // CONFIRMED -> PENDING
+        // devolvemos lo vendido y lo dejamos reservado de nuevo
+        const upd = await this.stockModel.updateOne(
+          { _id: stockId },
+          {
+            $inc: {
+              quantity: +qty, // vuelve al stock físico
+              reserved: +qty, // queda reservado otra vez
+            },
+          },
+        );
+        if (upd.matchedCount !== 1) {
+          throw new BadRequestException(
+            `No se pudo reabrir reserva para producto ${productId}`,
+          );
+        }
+      } else if (prevStatus === ReservationStatus.CANCELLED) {
+        // CANCELLED -> PENDING
+        // solo volver a reservar; quantity ya estaba disponible
+        const upd = await this.stockModel.updateOne(
+          { _id: stockId },
+          { $inc: { reserved: +qty } },
+        );
+        if (upd.matchedCount !== 1) {
+          throw new BadRequestException(
+            `No se pudo reservar nuevamente producto ${productId}`,
+          );
+        }
+      }
+    }
+
+    // 5) Finalmente marcar la reserva como PENDING
+    const updated = await this.reservationModel
+      .findByIdAndUpdate(
+        id,
+        { $set: { status: ReservationStatus.PENDING } },
+        { new: true },
+      )
+      .populate(reservationPopulate) 
+      .lean();
+
+    return updated;
+  }
+
+
 
 }

@@ -1,0 +1,101 @@
+/* ====== LAYOUT GLOBAL (márgenes y gutters) ====== */
+
+/* Gutters horizontales responsivos para todos los container-7xl */
+.container-7xl {
+  max-width: 1280px;                 /* por si no lo tenías */
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: clamp(16px, 3vw, 32px);
+  padding-right: clamp(16px, 3vw, 32px);
+}
+
+/* Aire arriba/abajo entre header, contenido y footer */
+main.container-7xl {
+  margin-top: 16px;
+  margin-bottom: 24px;
+}
+
+/* Las tarjetas blancas (listado y formulario) con respiro vertical */
+section > .rounded-xl {
+  margin-bottom: 16px;
+}
+
+/* El card del formulario no se estira: ancho máximo cómodo y pegado a la derecha en desktop */
+@media (min-width: 768px) {
+  /* targetea el card que está en la columna derecha (el primero dentro del <section> form) */
+  .md\:col-span-5 > .rounded-xl {
+    max-width: 640px;   /* ~max-w-xl */
+    margin-left: auto;  /* lo empuja a la derecha */
+  }
+}
+
+/* Compacta ligeramente los campos Material para que no “crezcan” */
+.mat-mdc-form-field-infix {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+/* Espacio entre form-fields dentro del card del formulario */
+.md\:col-span-5 .mat-mdc-form-field {
+  margin-bottom: 8px;
+}
+
+/* ====== SELECT: chips y panel (lo que ya tenías) ====== */
+.cat-trigger-chips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem;
+  align-items: center;
+  min-height: 1.75rem;
+}
+.cat-select .mat-mdc-select-value { white-space: normal; }
+
+.chip{
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 2px 6px;
+  border-radius: 9999px;
+  background: #e9eef8;
+  color: #2f3f56;
+  border: 1px solid #dfe6f6;
+}
+.chip.more{
+  background: transparent;
+  border: 0;
+  color: #6b7280;
+}
+
+.cat-panel{
+  max-height: 280px !important;
+  border-radius: 10px !important;
+}
+.cat-panel .mat-mdc-option{
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.header-safe-top {
+  /* 8px de padding + el espacio del notch/status bar si existe */
+  padding-top: calc(var(--safe-area-top) + 8px);
+}
+
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+}
+
+/* Empuja el header hacia abajo en móviles */
+.header-safe-top {
+  /* Fallback para Android (muchas veces env() es 0) */
+  padding-top: 40px;
+
+  /* Si el navegador respeta el safe-area, suma un extra */
+  padding-top: calc(var(--safe-area-top) + 20px);
+}
+
+/* En desktop no queremos tanto espacio arriba */
+@media (min-width: 768px) {
+  .header-safe-top {
+    padding-top: 8px;
+  }
+}
+

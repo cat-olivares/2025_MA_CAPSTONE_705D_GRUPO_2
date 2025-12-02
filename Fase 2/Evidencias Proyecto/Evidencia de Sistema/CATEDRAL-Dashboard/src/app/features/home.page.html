@@ -1,0 +1,80 @@
+<app-header></app-header>
+<div class="min-h-screen flex flex-col">
+
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+
+  <nav class="bg-white text-[13px] py-2 border-b border-neutral-200 mt-2 md:mt-1">
+    <div class="max-w-6xl mx-auto">
+      <!-- Contenedor scroll SOLO en móvil -->
+      <div class="overflow-x-auto no-scrollbar md:overflow-visible">
+        <!-- Fila de enlaces -->
+        <div class="flex items-center gap-4 px-3
+               md:justify-center md:px-0 md:gap-6">
+          <a routerLink="/catalogo" [queryParams]="{cat:'mujer'}"
+            class="px-2 pb-1 whitespace-nowrap hover:text-[#2f3f56] transition-colors">
+            Perfumes de Mujer
+          </a>
+
+          <a routerLink="/catalogo" [queryParams]="{cat:'hombre'}"
+            class="px-2 pb-1 whitespace-nowrap hover:text-[#2f3f56] transition-colors">
+            Perfumes de Hombre
+          </a>
+
+          <a routerLink="/catalogo" [queryParams]="{cat:'disenador'}"
+            class="px-2 pb-1 whitespace-nowrap hover:text-[#2f3f56] transition-colors">
+            Perfumes de Diseñador
+          </a>
+
+          <a routerLink="/catalogo" [queryParams]="{cat:'nicho'}"
+            class="px-2 pb-1 whitespace-nowrap hover:text-[#2f3f56] transition-colors">
+            Perfumes de Nicho
+          </a>
+
+          <span class="mx-2 h-5 w-px bg-neutral-200 hidden sm:inline-block"></span>
+
+          <a routerLink="/faq" class="px-2 pb-1 whitespace-nowrap hover:text-[#2f3f56] transition-colors">
+            FAQ
+          </a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+
+
+  <!-- Carrusel -->
+  <app-hero-carousel></app-hero-carousel>
+
+  <!-- Categorías rápidas -->
+  <app-category-pills></app-category-pills>
+
+  <!-- Más vendidos -->
+  <main>
+    <section class="container-7xl py-8">
+      <h2 class="text-xl font-semibold text-center mb-6 border-b border-stone-200 pb-2">
+        Perfumes Populares
+      </h2>
+
+      <div *ngIf="loading" class="text-center text-sm text-neutral-500 py-6">
+        Cargando productos…
+      </div>
+      <div *ngIf="!loading && error" class="text-center text-sm text-red-600 py-6">
+        {{ error }}
+      </div>
+
+      <div *ngIf="!loading && !error" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
+        <app-product-card *ngFor="let p of bestSellers" [product]="p"></app-product-card>
+      </div>
+
+
+      <div class="mt-8 flex justify-center">
+        <a routerLink="/catalogo" class="rounded-full px-6 py-2 bg-[#2f3f56] text-white hover:bg-[#223149] transition">
+          Ver más
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <app-footer class="mt-auto"></app-footer>
+</div>

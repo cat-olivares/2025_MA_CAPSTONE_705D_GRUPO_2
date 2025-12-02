@@ -1,0 +1,117 @@
+<app-header></app-header>
+
+<div class="min-h-screen flex flex-col bg-[#f7f9fc]">
+  <main class="flex-1">
+    <section class="container-7xl py-4 md:py-6">
+
+      <!-- Loading / Error -->
+      <div *ngIf="loading" class="text-sm text-neutral-500">Cargando…</div>
+      <div *ngIf="!loading && error" class="text-sm text-red-600">{{ error }}</div>
+
+      <ng-container *ngIf="!loading && p">
+        <!-- Migas -->
+        <nav class="text-[11px] sm:text-xs text-neutral-500 mb-3 flex gap-1 flex-wrap">
+          <a routerLink="/" class="hover:underline">Inicio</a><span>·</span>
+          <a routerLink="/catalogo" class="hover:underline">Catálogo</a><span>·</span>
+          <span class="font-medium text-[#2f3f56] truncate max-w-[180px] sm:max-w-none">
+            {{ p.name }}
+          </span>
+        </nav>
+
+        <!-- Card principal -->
+        <section
+          class="grid md:grid-cols-2 gap-5 md:gap-6 bg-white rounded-2xl p-4 sm:p-6 ring-1 ring-[#e8ecf4]">
+
+          <!-- Imagen -->
+          <div class="rounded-xl bg-[#f5f7fb] grid place-items-center p-4 sm:p-6">
+            <img
+              [src]="p.imageUrl"
+              [alt]="p.name"
+              class="max-h-[260px] sm:max-h-[380px] object-contain" />
+          </div>
+
+          <!-- Info -->
+          <div class="flex flex-col gap-3">
+            <div class="text-[11px] text-neutral-500">
+              {{ p.code }}
+            </div>
+
+            <h1 class="text-lg sm:text-xl font-semibold text-[#2f3f56] leading-snug">
+              {{ p.name }}
+            </h1>
+
+            <div class="mt-1 text-[#2f3f56] font-semibold text-xl">
+              {{ p.price | currency:'CLP':'symbol-narrow':'1.0-0' }}
+            </div>
+
+            <div
+              class="text-sm font-medium"
+              [class.text-green-700]="p.inStock > 0"
+              [class.text-red-600]="p.inStock === 0">
+              {{ p.inStock > 0 ? ('Stock disponible: ' + p.inStock) : 'Sin stock' }}
+            </div>
+
+            <!-- Categorías -->
+            <div
+              class="mt-2 flex flex-wrap gap-2"
+              *ngIf="p.categoryNames.length">
+              <span
+                *ngFor="let c of p.categoryNames"
+                class="text-[11px] px-2 py-[3px] rounded-full bg-[#e9eef8] text-[#2f3f56] ring-1 ring-[#dfe6f6]">
+                {{ c }}
+              </span>
+            </div>
+
+            <!-- Cantidad + Acciones -->
+            <div class="mt-4 space-y-3">
+              <!-- Cantidad -->
+              <div class="inline-flex items-center gap-3 rounded-full bg-stone-50 px-3 py-1.5 w-fit">
+                <button
+                  class="w-7 h-7 rounded-full bg-white border border-stone-200 hover:bg-stone-100 flex items-center justify-center"
+                  (click)="dec()">
+                  −
+                </button>
+                <span class="w-8 text-center text-sm font-medium">
+                  {{ qty }}
+                </span>
+                <button
+                  class="w-7 h-7 rounded-full bg-white border border-stone-200 hover:bg-stone-100 flex items-center justify-center"
+                  (click)="inc()">
+                  +
+                </button>
+              </div>
+
+              <!-- Botones -->
+              <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
+                <button
+                  class="w-full sm:w-auto px-5 py-2 rounded-full disabled:opacity-50 bg-[#2f3f56] text-white text-sm font-medium hover:bg-[#223149] transition"
+                  [disabled]="p.inStock === 0"
+                  (click)="addToCart()">
+                  Agregar al carro
+                </button>
+
+                <button
+                  class="w-full sm:w-auto px-5 py-2 rounded-full bg-white text-sm font-medium ring-1 ring-[#dfe6f6] hover:bg-stone-100 transition">
+                  Reservar
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Descripción -->
+        <section class="mt-6 md:mt-8 bg-white rounded-2xl p-4 sm:p-5 ring-1 ring-[#e8ecf4]">
+          <h2 class="text-base font-semibold text-[#2f3f56] mb-2">
+            Descripción
+          </h2>
+          <p class="text-sm text-neutral-700 leading-relaxed">
+            Fragancia de alta calidad. (Cuando tu API traiga descripción o notas aromáticas,
+            se mostrarán aquí.)
+          </p>
+        </section>
+      </ng-container>
+    </section>
+  </main>
+
+  <app-footer class="mt-auto"></app-footer>
+</div>
